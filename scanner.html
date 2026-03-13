@@ -127,7 +127,7 @@
     var errorMsg    = document.getElementById('errorMsg');
 
     var scannedFolios = {};   // folio → timestamp del último escaneo
-    var scannedList   = [];   // lista ordenada de folios escaneados
+    var scannedList   = [];   // lista ordenada de folios escaneados (para enviar al volver)
     var scanCount     = 0;
     var scanning      = false;
     var audioCtx      = null;
@@ -136,7 +136,7 @@
     var lastScanTime  = 0;
     var stream        = null;
 
-    // Leer returnUrl del parámetro de URL
+    // Leer returnUrl del parámetro de URL (viene de la app principal)
     var returnUrl = '';
     try {
       var urlParams = new URLSearchParams(window.location.search);
@@ -179,6 +179,7 @@
         return; // Aún en cooldown
       }
       scannedFolios[folio] = ahora;
+      // Agregar a la lista de folios escaneados (sin duplicados)
       if (scannedList.indexOf(folio) === -1) {
         scannedList.push(folio);
       }
@@ -190,7 +191,7 @@
       vibrar();
       mostrarFlash();
 
-      // Enviar al opener via postMessage
+      // Intentar enviar al opener via postMessage (puede funcionar en algunos navegadores)
       if (window.opener && !window.opener.closed) {
         window.opener.postMessage({ type: 'qr-folio', folio: folio }, '*');
       }
@@ -299,7 +300,7 @@
         stream.getTracks().forEach(function(t) { t.stop(); });
       }
 
-      // Si tenemos returnUrl y folios escaneados, redirigir de vuelta a la app
+      // Si tenemos returnUrl, redirigir de vuelta a la app con los folios escaneados
       if (returnUrl && scannedList.length > 0) {
         var sep = returnUrl.indexOf('?') >= 0 ? '&' : '?';
         var url = returnUrl + sep + 'folios=' + encodeURIComponent(scannedList.join(','));
@@ -315,6 +316,7 @@
 
       // Fallback: intentar cerrar la ventana
       window.close();
+      // Si window.close no funciona (no fue abierto con window.open)
       document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:30px;">' +
         '<div><p style="font-size:18px;margin-bottom:10px;">✅ Escaneo finalizado</p>' +
         '<p style="color:#aaa;font-size:14px;">Se escanearon ' + scanCount + ' folio' + (scanCount !== 1 ? 's' : '') + '.<br>Puedes cerrar esta pestaña manualmente.</p></div></div>';
