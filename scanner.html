@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Escáner QR - Retiros</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: white; font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; height: 100vh; width: 100vw; }
+
+    /* Video fullscreen */
+    #video { width: 100vw; height: 100vh; object-fit: cover; display: block; }
+    #canvas { display: none; }
+
+    /* Overlay sobre el video */
+    .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+
+    /* Barra superior */
+    .top-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent); pointer-events: auto; }
+    .top-bar h1 { font-size: 16px; font-weight: bold; }
+    .badge { background: #1a73e8; color: white; border-radius: 20px; padding: 4px 14px; font-size: 14px; font-weight: bold; min-width: 30px; text-align: center; }
+
+    /* Viewfinder */
+    .viewfinder { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 260px; height: 260px; z-index: 11; pointer-events: none; }
+    .vf-corner { position: absolute; width: 30px; height: 30px; border-color: #1a73e8; border-style: solid; border-width: 0; }
+    .vf-tl { top: 0; left: 0; border-top-width: 4px; border-left-width: 4px; border-top-left-radius: 12px; }
+    .vf-tr { top: 0; right: 0; border-top-width: 4px; border-right-width: 4px; border-top-right-radius: 12px; }
+    .vf-bl { bottom: 0; left: 0; border-bottom-width: 4px; border-left-width: 4px; border-bottom-left-radius: 12px; }
+    .vf-br { bottom: 0; right: 0; border-bottom-width: 4px; border-right-width: 4px; border-bottom-right-radius: 12px; }
+    .vf-label { position: absolute; bottom: -30px; left: 0; right: 0; text-align: center; font-size: 13px; color: rgba(255,255,255,0.8); text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+
+    /* Línea de escaneo animada */
+    .scan-line { position: absolute; top: 0; left: 10px; right: 10px; height: 2px; background: #1a73e8; box-shadow: 0 0 8px #1a73e8; animation: scanMove 2s ease-in-out infinite; }
+    @keyframes scanMove { 0%, 100% { top: 10px; } 50% { top: calc(100% - 10px); } }
+
+    /* Flash verde al detectar */
+    .flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(67, 160, 71, 0.4); z-index: 15; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
+    .flash.active { opacity: 1; }
+
+    /* Barra inferior */
+    .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; padding: 16px; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); pointer-events: auto; }
+
+    /* Log de escaneos */
+    .scan-log { max-height: 120px; overflow-y: auto; margin-bottom: 12px; }
+    .scan-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(255,255,255,0.1); border-radius: 8px; margin-bottom: 4px; font-size: 13px; backdrop-filter: blur(4px); }
+    .scan-item .icon { font-size: 16px; flex-shrink: 0; }
+    .scan-item .folio { flex: 1; font-family: monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scan-item .time { font-size: 11px; color: rgba(255,255,255,0.6); flex-shrink: 0; }
+
+    /* Botón Listo */
+    .btn-done { width: 100%; padding: 16px; background: #e53935; color: white; border: none; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; }
+    .btn-done:active { background: #c62828; transform: scale(0.97); }
+
+    /* Pantalla de error */
+    .error-screen { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1a1a2e; z-index: 50; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; }
+    .error-screen.active { display: flex; }
+    .error-screen .icon { font-size: 60px; margin-bottom: 16px; }
+    .error-screen h2 { font-size: 20px; margin-bottom: 10px; }
+    .error-screen p { color: rgba(255,255,255,0.7); font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+    .btn-retry { padding: 14px 40px; background: #1a73e8; color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+    .btn-close { padding: 10px 30px; background: transparent; color: rgba(255,255,255,0.6); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; font-size: 14px; cursor: pointer; }
+
+    /* Input manual (fallback dentro del scanner) */
+    .manual-fallback { display: none; margin-top: 12px; }
+    .manual-fallback.active { display: flex; gap: 8px; }
+    .manual-fallback input { flex: 1; padding: 12px; border: 1.5px solid #555; border-radius: 8px; background: rgba(255,255,255,0.1); color: white; font-family: monospace; font-size: 14px; }
+    .manual-fallback input::placeholder { color: rgba(255,255,255,0.4); }
+    .manual-fallback button { padding: 12px 18px; background: #546e7a; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <!-- Overlay -->
+  <div class="overlay"></div>
+
+  <!-- Viewfinder -->
+  <div class="viewfinder">
+    <div class="vf-corner vf-tl"></div>
+    <div class="vf-corner vf-tr"></div>
+    <div class="vf-corner vf-bl"></div>
+    <div class="vf-corner vf-br"></div>
+    <div class="scan-line"></div>
+    <div class="vf-label">Apunta al código QR del ticket</div>
+  </div>
+
+  <!-- Flash verde -->
+  <div class="flash" id="flash"></div>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <h1>Escáner de Retiros</h1>
+    <div class="badge" id="counter">0</div>
+  </div>
+
+  <!-- Bottom bar -->
+  <div class="bottom-bar">
+    <div class="scan-log" id="scanLog"></div>
+    <div class="manual-fallback" id="manualFallback">
+      <input type="text" id="manualInput" placeholder="Folio: RET-..."
+             onkeydown="if(event.key==='Enter') enviarManual()">
+      <button onclick="enviarManual()">Enviar</button>
+    </div>
+    <button class="btn-done" onclick="cerrar()">Listo — Volver a Recepción</button>
+  </div>
+
+  <!-- Error screen -->
+  <div class="error-screen" id="errorScreen">
+    <div class="icon">📷</div>
+    <h2>No se pudo acceder a la cámara</h2>
+    <p id="errorMsg">Verifica que hayas dado permiso de cámara a este sitio en la configuración de tu navegador.</p>
+    <button class="btn-retry" onclick="iniciarCamara()">Reintentar</button>
+    <button class="btn-close" onclick="cerrar()">Volver sin escanear</button>
+  </div>
+
+  <script>
+    // ============ ESTADO ============
+    var video      = document.getElementById('video');
+    var canvas     = document.getElementById('canvas');
+    var ctx        = canvas.getContext('2d', { willReadFrequently: true });
+    var flash      = document.getElementById('flash');
+    var counterEl  = document.getElementById('counter');
+    var scanLogEl  = document.getElementById('scanLog');
+    var errorScreen = document.getElementById('errorScreen');
+    var errorMsg    = document.getElementById('errorMsg');
+
+    var scannedFolios = {};   // folio → timestamp del último escaneo
+    var scannedList   = [];   // lista ordenada de folios escaneados
+    var scanCount     = 0;
+    var scanning      = false;
+    var audioCtx      = null;
+    var COOLDOWN_MS   = 5000; // 5 segundos antes de re-escanear mismo folio
+    var SCAN_INTERVAL = 66;   // ~15 fps
+    var lastScanTime  = 0;
+    var stream        = null;
+
+    // Leer returnUrl del parámetro de URL
+    var returnUrl = '';
+    try {
+      var urlParams = new URLSearchParams(window.location.search);
+      returnUrl = urlParams.get('returnUrl') || '';
+    } catch(e) {}
+
+    // ============ AUDIO BEEP ============
+    function beep() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        var osc  = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = 800;
+        gain.gain.value = 0.3;
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+        osc.stop(audioCtx.currentTime + 0.2);
+      } catch(e) {}
+    }
+
+    // ============ VIBRACIÓN ============
+    function vibrar() {
+      try { navigator.vibrate(200); } catch(e) {}
+    }
+
+    // ============ FLASH VERDE ============
+    function mostrarFlash() {
+      flash.classList.add('active');
+      setTimeout(function() { flash.classList.remove('active'); }, 300);
+    }
+
+    // ============ ENVIAR FOLIO AL OPENER ============
+    function enviarFolio(folio) {
+      // Verificar cooldown
+      var ahora = Date.now();
+      if (scannedFolios[folio] && (ahora - scannedFolios[folio]) < COOLDOWN_MS) {
+        return; // Aún en cooldown
+      }
+      scannedFolios[folio] = ahora;
+      if (scannedList.indexOf(folio) === -1) {
+        scannedList.push(folio);
+      }
+      scanCount++;
+      counterEl.textContent = scanCount;
+
+      // Feedback
+      beep();
+      vibrar();
+      mostrarFlash();
+
+      // Enviar al opener via postMessage
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: 'qr-folio', folio: folio }, '*');
+      }
+
+      // Agregar al log visual
+      var hora = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      var item = document.createElement('div');
+      item.className = 'scan-item';
+      item.innerHTML = '<span class="icon">✅</span><span class="folio">' + folio + '</span><span class="time">' + hora + '</span>';
+      scanLogEl.insertBefore(item, scanLogEl.firstChild);
+
+      // Limitar log a 20 items
+      while (scanLogEl.children.length > 20) {
+        scanLogEl.removeChild(scanLogEl.lastChild);
+      }
+    }
+
+    // ============ ENVÍO MANUAL ============
+    function enviarManual() {
+      var input = document.getElementById('manualInput');
+      var folio = input.value.trim().toUpperCase();
+      if (!folio) return;
+      var match = folio.match(/RET-[A-Z0-9]+-\d{8}-\d+/);
+      if (match) {
+        enviarFolio(match[0]);
+        input.value = '';
+      } else {
+        input.style.borderColor = '#e53935';
+        setTimeout(function() { input.style.borderColor = '#555'; }, 1500);
+      }
+    }
+
+    // ============ LOOP DE ESCANEO ============
+    function escanear() {
+      if (!scanning) return;
+      requestAnimationFrame(escanear);
+
+      var ahora = Date.now();
+      if (ahora - lastScanTime < SCAN_INTERVAL) return;
+      lastScanTime = ahora;
+
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert'
+      });
+
+      if (code && code.data) {
+        var texto = code.data.trim();
+        var matchFolio = texto.match(/RET-[A-Z0-9]+-\d{8}-\d+/);
+        if (matchFolio) {
+          enviarFolio(matchFolio[0]);
+        }
+      }
+    }
+
+    // ============ INICIAR CÁMARA ============
+    function iniciarCamara() {
+      errorScreen.classList.remove('active');
+
+      var constraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      };
+
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then(function(s) {
+          stream = s;
+          video.srcObject = stream;
+          video.play();
+          scanning = true;
+          escanear();
+          // Mostrar input manual como opción adicional
+          document.getElementById('manualFallback').classList.add('active');
+        })
+        .catch(function(err) {
+          console.error('Error cámara:', err);
+          var msg = 'No se pudo acceder a la cámara.';
+          if (err.name === 'NotAllowedError') {
+            msg = 'Permiso de cámara denegado. Ve a la configuración de tu navegador y permite el acceso a la cámara para este sitio.';
+          } else if (err.name === 'NotFoundError') {
+            msg = 'No se encontró ninguna cámara en este dispositivo.';
+          } else if (err.name === 'NotReadableError') {
+            msg = 'La cámara está siendo usada por otra aplicación. Ciérrala e intenta de nuevo.';
+          }
+          errorMsg.textContent = msg;
+          errorScreen.classList.add('active');
+          // Mostrar input manual como fallback
+          document.getElementById('manualFallback').classList.add('active');
+        });
+    }
+
+    // ============ CERRAR ============
+    function cerrar() {
+      scanning = false;
+      if (stream) {
+        stream.getTracks().forEach(function(t) { t.stop(); });
+      }
+
+      // Si tenemos returnUrl y folios escaneados, redirigir de vuelta a la app
+      if (returnUrl && scannedList.length > 0) {
+        var sep = returnUrl.indexOf('?') >= 0 ? '&' : '?';
+        var url = returnUrl + sep + 'folios=' + encodeURIComponent(scannedList.join(','));
+        window.location.href = url;
+        return;
+      }
+
+      // Si tenemos returnUrl pero sin folios, solo redirigir
+      if (returnUrl) {
+        window.location.href = returnUrl;
+        return;
+      }
+
+      // Fallback: intentar cerrar la ventana
+      window.close();
+      document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:30px;">' +
+        '<div><p style="font-size:18px;margin-bottom:10px;">✅ Escaneo finalizado</p>' +
+        '<p style="color:#aaa;font-size:14px;">Se escanearon ' + scanCount + ' folio' + (scanCount !== 1 ? 's' : '') + '.<br>Puedes cerrar esta pestaña manualmente.</p></div></div>';
+    }
+
+    // ============ INICIAR ============
+    // Inicializar AudioContext con interacción del usuario (requerido en móviles)
+    document.addEventListener('click', function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.resume();
+      }
+      document.removeEventListener('click', initAudio);
+    }, { once: true });
+
+    iniciarCamara();
+  </script>
+</body>
+</html>
